@@ -2,15 +2,13 @@ package rime
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	mapset "github.com/deckarep/golang-set/v2"
-	"golang.org/x/sys/windows/registry"
 	"log"
 	"os"
-	"os/user"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -24,75 +22,65 @@ type lemma struct {
 }
 
 var (
-	mark    = "# +_+"      // 词库中的标记符号，表示从这行开始进行检查或排序
-	RimeDir = getRimeDir() // Rime 配置目录
-
-	EmojiMapPath = filepath.Join(RimeDir, "others/emoji-map.txt")
-	EmojiPath    = filepath.Join(RimeDir, "opencc/emoji.txt")
-
-	HanziPath   = filepath.Join(RimeDir, "cn_dicts/8105.dict.yaml")
-	BasePath    = filepath.Join(RimeDir, "cn_dicts/base.dict.yaml")
-	ExtPath     = filepath.Join(RimeDir, "cn_dicts/ext.dict.yaml")
-	TencentPath = filepath.Join(RimeDir, "cn_dicts/tencent.dict.yaml")
-
-	HanziSet   = readToSet(HanziPath)
-	BaseSet    = readToSet(BasePath)
-	ExtSet     = readToSet(ExtPath)
-	TencentSet = readToSet(TencentPath)
-
-	需要注音TXT   = filepath.Join(RimeDir, "others/script/rime/需要注音.txt")
-	错别字TXT    = filepath.Join(RimeDir, "others/script/rime/错别字.txt")
-	汉字拼音映射TXT = filepath.Join(RimeDir, "others/script/rime/汉字拼音映射.txt")
+	mark         = "# +_+" // 词库中的标记符号，表示从这行开始进行检查或排序
+	RimeDir      string
+	EmojiMapPath string
+	EmojiPath    string
+	HanziPath    string
+	BasePath     string
+	ExtPath      string
+	TencentPath  string
+	HanziSet     mapset.Set[string]
+	BaseSet      mapset.Set[string]
+	ExtSet       mapset.Set[string]
+	TencentSet   mapset.Set[string]
+	需要注音TXT      string
+	错别字TXT       string
+	汉字拼音映射TXT    string
+	AutoConfirm  bool
 )
 
-// 获取 macOS/Windows Rime 配置目录
-func getRimeDir() string {
-	var dir string
-	switch runtime.GOOS {
-	case "darwin": // macOS
-		u, err := user.Current()
+func init() {
+	// 定义命令行参数
+	flag.StringVar(&RimeDir, "rime_path", "", "Specify the Rime configuration directory")
+	flag.BoolVar(&AutoConfirm, "auto_confirm", false, "Automatically confirm the prompt")
+	flag.Parse()
+
+	RimeDir = getRimeDir(RimeDir) // Rime 配置目录
+
+	EmojiMapPath = filepath.Join(RimeDir, "others/emoji-map.txt")
+	EmojiPath = filepath.Join(RimeDir, "opencc/emoji.txt")
+
+	HanziPath = filepath.Join(RimeDir, "cn_dicts/8105.dict.yaml")
+	BasePath = filepath.Join(RimeDir, "cn_dicts/base.dict.yaml")
+	ExtPath = filepath.Join(RimeDir, "cn_dicts/ext.dict.yaml")
+	TencentPath = filepath.Join(RimeDir, "cn_dicts/tencent.dict.yaml")
+
+	HanziSet = readToSet(HanziPath)
+	BaseSet = readToSet(BasePath)
+	ExtSet = readToSet(ExtPath)
+	TencentSet = readToSet(TencentPath)
+
+	需要注音TXT = filepath.Join(RimeDir, "others/script/rime/需要注音.txt")
+	错别字TXT = filepath.Join(RimeDir, "others/script/rime/错别字.txt")
+	汉字拼音映射TXT = filepath.Join(RimeDir, "others/script/rime/汉字拼音映射.txt")
+
+	initCheck()
+	initSchemas()
+	initPinyin()
+}
+
+func getRimeDir(rimePath string) string {
+	if rimePath != "" {
+		absPath, err := filepath.Abs(rimePath)
 		if err != nil {
-			log.Fatalln(err)
+			log.Fatalf("Failed to get absolute path: %v", err)
 		}
-		dir = filepath.Join(u.HomeDir, "Library/Rime")
-	case "windows": // Windows
-		dir = getWeaselDir()
-	default:
-		log.Fatalf("Unsupported OS: %s so far", runtime.GOOS)
+		// 使用传入的路径
+		return absPath
 	}
 
-	return dir
-}
-
-func getWeaselDir() string {
-	keyPath := `Software\Rime\Weasel`
-	valueName := "RimeUserDir"
-
-	// Get from Windows registry
-	k, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE)
-	if err != nil {
-		log.Printf("Failed to open registry key: %v\n", err)
-		// Fallback to default dir
-		return getDefaultWeaselDir()
-	}
-	defer k.Close()
-
-	rimeUserDir, _, err := k.GetStringValue(valueName)
-	if err != nil {
-		log.Printf("Failed to read registry value: %v\n", err)
-		// Fallback to default dir
-		return getDefaultWeaselDir()
-	}
-
-	return rimeUserDir
-}
-
-func getDefaultWeaselDir() string {
-	appData := os.Getenv("APPDATA") // AppData\Roaming
-	if appData == "" {
-		log.Fatalln("APPDATA environment variable is not set.")
-	}
-	return filepath.Join(appData, "Rime")
+	return getRimeDirForPlatform()
 }
 
 // 将所有词库读入 set，供检查或排序使用
